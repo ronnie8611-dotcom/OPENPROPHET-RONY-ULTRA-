@@ -1,0 +1,16 @@
+.env
+.git
+.gitignore
+.github
+_Backups
+_Archivo_Muerto
+bot.exe
+*.log
+data/
+activity_logs/
+Backtest_Lab/data_cache
+Backtest_Lab/*.log
+Backtest_Lab/validate_*.txt
+Backtest_Lab/backtest_*.txt
+Backtest_Lab/lab_run.log
+node_modules

@@ -1,0 +1,25 @@
+services:
+  bot:
+    build: .
+    image: openprophet:local
+    container_name: openprophet
+    restart: unless-stopped
+    working_dir: /app
+    env_file:
+      - .env
+    environment:
+      # IB Gateway/TWS runs on the Windows host, not inside the container.
+      - IBKR_HOST=host.docker.internal
+      - BIND_ADDR=0.0.0.0
+      - LAB_DIR=/app/Backtest_Lab
+      - DATABASE_PATH=/app/data/prophet_trader.db
+    ports:
+      # Only this PC can reach the dashboard; never expose 0.0.0.0:4534.
+      - "127.0.0.1:4534:4534"
+    volumes:
+      - ./data:/app/data
+      - ./activity_logs:/app/activity_logs
+      - ./Backtest_Lab:/app/Backtest_Lab
+      - ./model.json:/app/model.json
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

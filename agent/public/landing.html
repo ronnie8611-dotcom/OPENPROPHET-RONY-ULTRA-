@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenProphet — Local AI trading workspace</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Crimson+Pro:ital,wght@0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #08080a; --bg-soft: #0c0c0e; --panel: #111113; --panel-2: #18181b;
+      --line: #27272a; --line-soft: #1e1e21; --text: #f4f4f5; --muted: #a1a1aa;
+      --faint: #71717a; --blue: #3b82f6; --blue-dark: #2563eb; --green: #22c55e;
+      --serif: 'Crimson Pro', Georgia, serif; --sans: 'Source Sans 3', Helvetica Neue, sans-serif;
+      --mono: 'IBM Plex Mono', monospace;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body { min-height: 100dvh; background: var(--bg); color: var(--text); font-family: var(--sans); -webkit-font-smoothing: antialiased; overflow-x: hidden; }
+    body::before { content: ''; position: fixed; inset: 0; z-index: -1; background-image: radial-gradient(circle at 1px 1px, rgba(255,255,255,0.07) 1px, transparent 0); background-size: 28px 28px; mask-image: linear-gradient(to bottom, black 0%, rgba(0,0,0,0.55) 55%, transparent 100%); pointer-events: none; }
+    body::after { content: ''; position: fixed; inset: 0; z-index: -1; background: radial-gradient(ellipse at 70% 25%, rgba(37,99,235,0.12), transparent 45%); pointer-events: none; }
+    a { color: inherit; text-decoration: none; }
+    .shell { width: min(1240px, calc(100% - 56px)); margin: 0 auto; }
+    .topbar { min-height: 64px; display: flex; align-items: center; justify-content: space-between; gap: 24px; border-bottom: 1px solid var(--line); background: rgba(8,8,10,0.82); backdrop-filter: blur(14px); position: sticky; top: 0; z-index: 20; }
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .brand-name { font-family: var(--serif); font-size: 22px; font-weight: 700; letter-spacing: -0.4px; }
+    .brand-name span { color: var(--blue); }
+    .self-badge { border: 1px solid var(--line); border-radius: 3px; color: var(--faint); font-family: var(--mono); font-size: 9px; letter-spacing: 0.14em; padding: 3px 7px; text-transform: uppercase; }
+    .nav-links { display: flex; align-items: center; gap: 26px; }
+    .nav-links a { color: var(--muted); font-size: 13px; font-weight: 600; }
+    .nav-links a:hover { color: var(--text); }
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid var(--line); border-radius: 5px; padding: 10px 16px; background: transparent; color: var(--text); font-family: var(--sans); font-size: 13px; font-weight: 700; cursor: pointer; transition: border-color .15s ease, background .15s ease, color .15s ease; }
+    .btn:hover { border-color: var(--faint); background: var(--panel); }
+    .btn.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+    .btn.primary:hover { background: var(--blue-dark); border-color: var(--blue-dark); }
+    .hero { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.04fr); align-items: center; gap: 64px; padding: 82px 0 76px; }
+    .eyebrow { color: var(--blue); font-family: var(--mono); font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; margin-bottom: 22px; }
+    .hero h1 { font-family: var(--serif); font-size: clamp(54px, 7vw, 92px); font-weight: 600; line-height: 0.94; letter-spacing: -0.04em; max-width: 650px; }
+    .lead { color: var(--muted); font-size: 18px; line-height: 1.55; max-width: 500px; margin-top: 26px; }
+    .price-line { display: flex; align-items: baseline; gap: 10px; margin-top: 28px; }
+    .price { font-family: var(--serif); font-size: 25px; font-weight: 700; }
+    .price-note { color: var(--faint); font-size: 13px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 24px; }
+    .meta { color: var(--faint); font-size: 12px; line-height: 1.7; margin-top: 18px; }
+    .meta strong { color: var(--muted); font-weight: 600; }
+    .hero-art { min-width: 0; }
+    .hero-copy { min-width: 0; }
+    .hero h1, .lead { max-width: 100%; overflow-wrap: anywhere; }
+    .frame { max-width: 100%; }
+    .frame { background: var(--bg-soft); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 30px 90px rgba(0,0,0,0.5); overflow: hidden; }
+    .frame-bar { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 14px; border-bottom: 1px solid var(--line); background: #0f0f12; }
+    .frame-label { color: var(--faint); font-family: var(--mono); font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; }
+    .frame-label strong { color: var(--muted); font-weight: 500; }
+    .frame-dots { display: flex; gap: 5px; }
+    .frame-dots span { width: 6px; height: 6px; border-radius: 50%; background: var(--line); }
+    .frame-tabs { display: flex; align-items: center; gap: 17px; padding: 10px 14px; border-bottom: 1px solid var(--line); color: var(--faint); font-size: 10px; overflow: hidden; white-space: nowrap; }
+    .frame-tabs span:first-child { color: var(--text); border-bottom: 1px solid var(--blue); padding-bottom: 5px; }
+    .frame-subbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; border-bottom: 1px solid var(--line-soft); background: #0d0d10; }
+    .manager-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 3px; padding: 4px 8px; color: var(--muted); font-family: var(--mono); font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase; }
+    .manager-chip::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 8px var(--blue); }
+    .frame-actions { display: flex; gap: 5px; color: var(--faint); font-size: 9px; }
+    .frame-actions span { border: 1px solid var(--line); border-radius: 3px; padding: 3px 6px; }
+    .stage { min-height: 330px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; text-align: center; padding: 42px 24px; background-image: radial-gradient(circle at 1px 1px, rgba(255,255,255,0.07) 1px, transparent 0); background-size: 24px 24px; position: relative; }
+    .stage::before { content: ''; position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 48%, transparent 0%, transparent 28%, var(--bg-soft) 78%); pointer-events: none; }
+    .orb { width: 90px; height: 90px; border: 1px solid var(--line); border-radius: 50%; display: flex; align-items: center; justify-content: center; position: relative; margin-bottom: 4px; }
+    .orb::before { content: ''; position: absolute; inset: 14px; border: 1px solid var(--line); border-radius: 50%; opacity: .7; }
+    .orb::after { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 18px var(--blue); }
+    .stage-kicker { color: var(--faint); font-family: var(--mono); font-size: 8px; letter-spacing: .18em; text-transform: uppercase; position: relative; }
+    .stage h2 { font-family: var(--serif); font-size: 22px; font-weight: 600; position: relative; }
+    .stage p { max-width: 330px; color: var(--faint); font-size: 11px; line-height: 1.6; position: relative; }
+    .frame-prompt { border-top: 1px solid var(--line); padding: 9px 12px 11px; background: #0d0d10; }
+    .frame-chips { display: flex; gap: 4px; overflow: hidden; margin-bottom: 7px; }
+    .frame-chips span { border: 1px solid var(--line); border-radius: 99px; color: var(--faint); font-size: 8px; padding: 3px 7px; white-space: nowrap; }
+    .frame-input { display: flex; gap: 6px; }
+    .frame-input div { flex: 1; border: 1px solid var(--line); border-radius: 4px; color: var(--faint); font-size: 9px; padding: 8px 9px; overflow: hidden; white-space: nowrap; }
+    .frame-input b { background: var(--blue); border-radius: 3px; color: #fff; font-size: 9px; padding: 8px 11px; }
+    .frame-caption { border-top: 1px solid var(--line); padding: 9px 12px; color: var(--faint); font-size: 9px; }
+    .frame-caption strong { color: var(--muted); font-weight: 500; }
+    .section { border-top: 1px solid var(--line); padding: 74px 0; }
+    .section-head { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: end; margin-bottom: 34px; }
+    .section-kicker { color: var(--blue); font-family: var(--mono); font-size: 10px; letter-spacing: .16em; text-transform: uppercase; margin-bottom: 12px; }
+    .section h2 { font-family: var(--serif); font-size: clamp(32px, 4vw, 48px); font-weight: 600; line-height: 1.03; letter-spacing: -.025em; }
+    .section-head p { color: var(--muted); font-size: 15px; line-height: 1.65; max-width: 470px; justify-self: end; }
+    .setup-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+    .setup-card { border: 1px solid var(--line); background: rgba(17,17,19,0.68); border-radius: 8px; padding: 20px; min-height: 178px; }
+    .setup-card.active { border-color: rgba(59,130,246,0.7); box-shadow: inset 0 0 0 1px rgba(59,130,246,0.2), 0 0 30px rgba(37,99,235,0.09); }
+    .step { color: var(--faint); font-family: var(--mono); font-size: 9px; letter-spacing: .14em; margin-bottom: 22px; }
+    .setup-card h3 { font-size: 17px; font-weight: 700; margin-bottom: 8px; }
+    .setup-card p { color: var(--muted); font-size: 13px; line-height: 1.6; }
+    .observatory-grid { display: grid; grid-template-columns: .9fr 1.1fr; gap: 56px; align-items: center; }
+    .observatory-copy h2 { font-family: var(--serif); font-size: clamp(32px, 4vw, 48px); font-weight: 600; line-height: 1.03; letter-spacing: -.025em; margin-bottom: 18px; }
+    .observatory-copy p { color: var(--muted); line-height: 1.7; font-size: 15px; max-width: 470px; }
+    .check-list { display: grid; gap: 12px; margin-top: 26px; }
+    .check-item { display: flex; align-items: flex-start; gap: 10px; color: var(--muted); font-size: 13px; line-height: 1.55; }
+    .check-item::before { content: '✓'; color: var(--green); font-family: var(--mono); font-size: 11px; margin-top: 1px; }
+    .quote { border-left: 1px solid var(--blue); padding-left: 18px; margin-top: 28px; color: var(--faint); font-family: var(--mono); font-size: 10px; line-height: 1.8; letter-spacing: .02em; }
+    .cta-band { border: 1px solid var(--line); background: linear-gradient(110deg, rgba(37,99,235,0.16), rgba(17,17,19,0.7) 52%, rgba(17,17,19,0.8)); border-radius: 10px; padding: 34px; display: flex; align-items: center; justify-content: space-between; gap: 28px; }
+    .cta-band h2 { font-family: var(--serif); font-size: clamp(28px, 3.6vw, 42px); font-weight: 600; line-height: 1.05; }
+    .cta-band p { color: var(--muted); font-size: 14px; margin-top: 8px; }
+    .footer { border-top: 1px solid var(--line); padding: 24px 0 34px; display: flex; align-items: center; justify-content: space-between; gap: 18px; color: var(--faint); font-size: 11px; }
+    .footer strong { color: var(--muted); font-weight: 600; }
+    .footer-links { display: flex; gap: 18px; }
+    .topbar-inner { display: flex; align-items: center; justify-content: space-between; gap: 24px; min-height: 64px; }
+    .footer-links a:hover { color: var(--text); }
+    @media (max-width: 980px) {
+      .hero { grid-template-columns: 1fr; gap: 42px; padding-top: 58px; }
+      .hero h1 { max-width: 720px; }
+      .section-head { grid-template-columns: 1fr; gap: 14px; }
+      .section-head p { justify-self: start; }
+      .observatory-grid { grid-template-columns: 1fr; gap: 36px; }
+      .setup-grid { grid-template-columns: 1fr; }
+      .setup-card { min-height: 0; }
+    }
+    @media (max-width: 680px) {
+      .shell { width: calc(100% - 32px); }
+      .nav-links { display: none; }
+      .topbar-inner { gap: 10px; }
+      .brand { min-width: 0; }
+      .brand-name { font-size: 20px; }
+      .self-badge { display: none; }
+      .topbar .btn { padding: 9px 12px; white-space: nowrap; }
+      .hero { padding: 44px 0 54px; }
+      .hero-copy, .hero-art, .frame { width: 100%; min-width: 0; }
+      .hero h1 { font-size: clamp(34px, 10.5vw, 46px); letter-spacing: -0.03em; }
+      .lead { font-size: 16px; }
+      .actions .btn { flex: 1; }
+      .section { padding: 52px 0; }
+      .stage { min-height: 280px; }
+      .cta-band { padding: 24px; flex-direction: column; align-items: flex-start; }
+      .footer { flex-direction: column; align-items: flex-start; }
+    }
+
+  </style>
+</head>
+<body>
+<header class="topbar">
+  <div class="shell topbar-inner">
+    <div class="brand">
+      <a class="brand-name" href="/landing"><span>Open</span>Prophet</a>
+      <span class="self-badge">Self-install</span>
+    </div>
+    <nav class="nav-links" aria-label="Primary">
+      <a href="#product">Product</a>
+      <a href="#observatory">Observatory</a>
+      <a href="/?tab=watchlist">Watchlist</a>
+      <a href="#setup">Guide</a>
+      <a href="/">Dashboard</a>
+    </nav>
+    <a class="btn primary" href="/">Open app</a>
+  </div>
+</header>
+
+<main>
+  <section class="hero shell" id="product">
+    <div class="hero-copy">
+      <div class="eyebrow">Self-install pack · Mac / Linux / WSL</div>
+      <h1>Turn any LLM into a trading desk.</h1>
+      <p class="lead">Install a local AI trading workspace. Connect your model and broker, set the rules, and begin on paper.</p>
+      <div class="price-line">
+        <span class="price">One-time setup</span>
+        <span class="price-note">No subscription</span>
+      </div>
+      <div class="actions">
+        <a class="btn primary" href="/">Open dashboard</a>
+        <a class="btn" href="/?tab=observatory">Preview Observatory</a>
+        <a class="btn" href="#setup">See the setup</a>
+      </div>
+      <p class="meta"><strong>Local-first.</strong> Your machine, your keys, your data. Paper trading is the default.</p>
+    </div>
+    <div class="hero-art" aria-label="Preview of the Observatory interface">
+      <div class="frame">
+        <div class="frame-bar">
+          <div class="frame-label">OP / <strong>Local workspace</strong></div>
+          <div class="frame-label">Actual interface</div>
+          <div class="frame-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+        </div>
+        <div class="frame-tabs">
+          <span>Observatory</span><span>Terminal</span><span>Trades</span><span>Portfolio</span><span>Agents</span><span>Settings</span>
+        </div>
+        <div class="frame-subbar">
+          <span class="manager-chip">Manager</span>
+          <div class="frame-actions"><span>New chat</span><span>Skip</span><span>Settings</span></div>
+        </div>
+        <div class="stage">
+          <div class="orb"></div>
+          <div class="stage-kicker">Observatory · Stage</div>
+          <h2>The desk is quiet</h2>
+          <p>Ask the Manager to research a ticker, review the reasoning, or draft a paper-trading plan.</p>
+        </div>
+        <div class="frame-prompt">
+          <div class="frame-chips"><span>Research NVDA</span><span>Review QQQ</span><span>Draft a plan</span><span>Check risk</span></div>
+          <div class="frame-input"><div>Research a ticker, review a setup, or draft a plan...</div><b>Send</b></div>
+        </div>
+        <div class="frame-caption"><strong>Local workspace.</strong> This is a preview of the dashboard. Orders still require approval.</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section shell" id="setup">
+    <div class="section-head">
+      <div>
+        <div class="section-kicker">The self-install pack</div>
+        <h2>Your computer.<br>Your trading workspace.</h2>
+      </div>
+      <p>A practical setup guide with the real interface: install locally, connect your accounts, then start with simulated funds in a paper account.</p>
+    </div>
+    <div class="setup-grid">
+      <article class="setup-card">
+        <div class="step">01</div>
+        <h3>Install locally</h3>
+        <p>Run the workspace on your own machine. No hosted account, no shared multi-tenant database.</p>
+      </article>
+      <article class="setup-card">
+        <div class="step">02</div>
+        <h3>Connect your accounts</h3>
+        <p>Bring your model provider and broker credentials. The workspace keeps the configuration local.</p>
+      </article>
+      <article class="setup-card active">
+        <div class="step">03</div>
+        <h3>Begin on paper</h3>
+        <p>Choose tools, permissions, and risk limits before starting a paper-trading run. Research first; approve orders explicitly.</p>
+      </article>
+    </div>
+  <section class="section shell" id="observatory">
+    <div class="observatory-grid">
+      <div class="observatory-copy">
+        <div class="section-kicker">Observatory</div>
+        <h2>A quiet desk for noisy markets.</h2>
+        <p>The Observatory is the agent’s workspace: research, reasoning, and paper-trading plans in one place. Start with a question, inspect the evidence, then decide what deserves an order.</p>
+        <div class="check-list">
+          <div class="check-item">Ask the Manager to research a ticker or review a setup.</div>
+          <div class="check-item">See the reasoning before you see an order ticket.</div>
+          <div class="check-item">Keep risk limits and human approval in the loop.</div>
+        </div>
+        <div class="quote">“The desk is quiet.”<br>Ask the Manager to create a plan, run research, or place a paper trade.</div>
+      </div>
+      <div class="frame" aria-label="Observatory workspace preview">
+        <div class="frame-bar">
+          <div class="frame-label">OP / <strong>Observatory</strong></div>
+          <div class="frame-label">Manager · live</div>
+          <div class="frame-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+        </div>
+        <div class="frame-tabs">
+          <span>Manager</span><span>New chat</span><span>Skip</span><span>Settings</span>
+        </div>
+        <div class="frame-subbar">
+          <span class="manager-chip">Manager</span>
+          <div class="frame-actions"><span>Research</span><span>Plan</span><span>Review</span></div>
+        </div>
+        <div class="stage">
+          <div class="orb"></div>
+          <div class="stage-kicker">Observatory · Stage</div>
+          <h2>The desk is quiet</h2>
+          <p>Research NVDA, compare the latest setup, and draft a paper-trading plan.</p>
+        </div>
+        <div class="frame-prompt">
+          <div class="frame-chips"><span>Research NVDA</span><span>Review QQQ</span><span>Draft a plan</span><span>Check risk</span></div>
+          <div class="frame-input"><div>Ask the Manager to research a ticker...</div><b>Send</b></div>
+        </div>
+        <div class="frame-caption"><strong>Human in the loop.</strong> Research is not an order. Approval is still required.</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section shell">
+    <div class="cta-band">
+      <div>
+        <h2>Open the Observatory.</h2>
+        <p>Your workspace runs on your computer. Start with paper, inspect the reasoning, and keep the rules visible.</p>
+      </div>
+      <div class="actions" style="margin-top:0">
+        <a class="btn primary" href="/?tab=observatory">Launch dashboard</a>
+        <a class="btn" href="/">Go to app</a>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="shell footer">
+  <div><strong>OpenProphet</strong> · Local AI trading workspace</div>
+  <div class="footer-links"><a href="#product">Product</a><a href="#observatory">Observatory</a><a href="/">Dashboard</a></div>
+</footer>
+
+
+</body>
+</html>

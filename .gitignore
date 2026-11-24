@@ -1,0 +1,84 @@
+# Secrets
+.env
+.env.backup*
+.env.bak
+.env.backend
+.mcp.json
+.claude/settings.local.json
+
+# Runtime data (secrets, databases, chat history)
+data/*
+!data/agent-config.json
+!data/strategies.json
+!data/symbols.json
+data_backup/
+activity_logs/
+controllers/data/
+
+# Logs
+*.log
+*.pid
+
+# Build artifacts
+prophet_bot
+prophet-trader-bot
+prophet-trader
+prophet-bot
+main
+mktdata_probe
+mktdata_test
+tws_smoke_test
+openprophet-bot
+
+# Archives & backups
+.archive_*
+*.bak
+_Backups/
+_Archivo_Muerto/
+
+# Lab caches and generated artifacts
+Backtest_Lab/data_cache/
+Backtest_Lab/__pycache__/
+Backtest_Lab/*.csv
+Backtest_Lab/model.json
+Backtest_Lab/model.onnx
+Backtest_Lab/results_backtest.json
+Backtest_Lab/retrain_log.txt
+Backtest_Lab/validate_out.txt
+Backtest_Lab/backtest_out.txt
+Backtest_Lab/*_err.txt
+
+# Large binaries
+bot.exe
+model.json
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Node (MCP server removed)
+node_modules/
+package-lock.json
+
+# Scratch
+.scratch/
+count_tokens.go
+bakes/
+fast.yaml
+quickstart.sh
+
+# Test artifacts
+services/test_integration_pm_db.json
+test-results/
+test_pm_db.json
+
+# Local check artifacts
+last_check.json
+check_output.txt
+check_exit.txt
+
+# News summary cache
+news_summaries/*.json

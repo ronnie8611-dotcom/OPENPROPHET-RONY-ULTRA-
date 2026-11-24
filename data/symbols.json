@@ -1,0 +1,22 @@
+{
+  "QQQ": { "name": "Invesco QQQ Trust, Series 1", "type": "ETF", "exchange": "NASDAQ" },
+  "SPY": { "name": "SPDR S&P 500 ETF Trust", "type": "ETF", "exchange": "NYSE Arca" },
+  "IWM": { "name": "iShares Russell 2000 ETF", "type": "ETF", "exchange": "NYSE Arca" },
+  "TSLA": { "name": "Tesla, Inc.", "type": "Stock", "exchange": "NASDAQ" },
+  "GOOGL": { "name": "Alphabet Inc.", "type": "Stock", "exchange": "NASDAQ" },
+  "META": { "name": "Meta Platforms, Inc.", "type": "Stock", "exchange": "NASDAQ" },
+  "MNQ": { "name": "Micro E-mini Nasdaq-100 Index Futures", "type": "Future", "exchange": "CME" },
+  "AAPL": { "name": "Apple Inc.", "type": "Stock", "exchange": "NASDAQ" },
+  "NVDA": { "name": "NVIDIA Corporation", "type": "Stock", "exchange": "NASDAQ" },
+  "MSFT": { "name": "Microsoft Corporation", "type": "Stock", "exchange": "NASDAQ" },
+  "AMZN": { "name": "Amazon.com, Inc.", "type": "Stock", "exchange": "NASDAQ" },
+  "DELL": { "name": "Dell Technologies Inc.", "type": "Stock", "exchange": "NYSE" },
+  "GOOG": { "name": "Alphabet Inc. Class C", "type": "Stock", "exchange": "NASDAQ" },
+  "BRK.B": { "name": "Berkshire Hathaway Inc. Class B", "type": "Stock", "exchange": "NYSE" },
+  "JPM": { "name": "JPMorgan Chase & Co.", "type": "Stock", "exchange": "NYSE" },
+  "V": { "name": "Visa Inc.", "type": "Stock", "exchange": "NYSE" },
+  "MA": { "name": "Mastercard Incorporated", "type": "Stock", "exchange": "NYSE" },
+  "AMD": { "name": "Advanced Micro Devices, Inc.", "type": "Stock", "exchange": "NASDAQ" },
+  "NFLX": { "name": "Netflix, Inc.", "type": "Stock", "exchange": "NASDAQ" },
+  "AVGO": { "name": "Broadcom Inc.", "type": "Stock", "exchange": "NASDAQ" }
+}

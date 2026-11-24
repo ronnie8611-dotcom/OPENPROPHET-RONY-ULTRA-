@@ -1,0 +1,773 @@
+// Package tws is a from-scratch Go client for the Interactive Brokers TWS API
+// socket protocol. It talks to IB Gateway / TWS over TCP using the v100+
+// length-prefixed, null-delimited message framing — no third-party library.
+//
+// It provides connection lifecycle management (handshake, startApi) and
+// natively integrates the encoder and decoder components.
+package tws
+
+import (
+	"bufio"
+	"context"
+	"encoding/binary"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/shopspring/decimal"
+)
+
+// Client version range advertised in the handshake. The server negotiates down
+// to min(serverMax, maxClientVer); bump maxClientVer when moving to a newer jar.
+const (
+	minClientVer = 100
+	maxClientVer = 187
+)
+
+// Client is a single TWS socket connection.
+type Client struct {
+	host     string
+	port     int
+	clientID int
+
+	conn    net.Conn
+	reader  *bufio.Reader
+	writeMu sync.Mutex
+	decoder *Decoder
+
+	serverVersion int
+	connTime      string
+
+	mu        sync.RWMutex
+	accounts  string
+	orderIDs  OrderIdManager
+	connected bool
+	dispatcher *Dispatcher
+
+	AsyncErrorCallback func(reqID, code int, msg string)
+	wrappers []Wrapper
+
+	nextIDCh  chan int64 // first nextValidId is delivered here
+	acctCh    chan string
+	errCh     chan error // a fatal error seen during connect
+	closed    chan struct{}
+	closeOnce sync.Once
+}
+
+// NewClient builds a client. clientID must be unique across concurrent API
+// connections to the same Gateway, or the Gateway rejects it (error 326).
+func NewClient(host string, port, clientID int) *Client {
+	c := &Client{
+		host:     host,
+		port:     port,
+		clientID: clientID,
+		nextIDCh: make(chan int64, 1),
+		acctCh:     make(chan string, 1),
+		errCh:      make(chan error, 1),
+		closed:     make(chan struct{}),
+		dispatcher: NewDispatcher(),
+	}
+	c.decoder = NewDecoder(c)
+	return c
+}
+
+// Connect dials the Gateway, performs the handshake and startApi, starts the
+// reader, and blocks until the first nextValidId arrives, a fatal error is
+// reported, or ctx is done. Pass a ctx with a timeout.
+func (c *Client) Connect(ctx context.Context) (err error) {
+	defer func() {
+		if err != nil {
+			c.Close()
+		}
+	}()
+
+	var d net.Dialer
+	conn, dialErr := d.DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", c.host, c.port))
+	if dialErr != nil {
+		return fmt.Errorf("dial %s:%d: %w", c.host, c.port, dialErr)
+	}
+	c.conn = conn
+	c.reader = bufio.NewReader(conn)
+
+	// Bound the synchronous handshake by the context deadline.
+	if dl, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(dl)
+	} else {
+		_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	}
+
+	if err = c.handshake(); err != nil {
+		return err
+	}
+	if err = c.startAPI(); err != nil {
+		return err
+	}
+
+	// Clear the deadline so the reader can block indefinitely once connected.
+	_ = conn.SetDeadline(time.Time{})
+	go c.readLoop()
+
+	var gotNextID, gotAccounts bool
+	for !gotNextID || !gotAccounts {
+		select {
+		case <-c.nextIDCh:
+			gotNextID = true
+		case acct := <-c.acctCh:
+			c.mu.Lock()
+			c.accounts = acct
+			c.mu.Unlock()
+			gotAccounts = true
+		case loopErr := <-c.errCh:
+			return loopErr
+		case <-ctx.Done():
+			return fmt.Errorf("connected but missing initialization before deadline: %w", ctx.Err())
+		case <-c.closed:
+			return fmt.Errorf("connection closed before initialization finished")
+		}
+	}
+
+	c.mu.Lock()
+	c.connected = true
+	c.mu.Unlock()
+	return nil
+}
+
+// handshake performs the v100+ greeting and reads the server version + time.
+func (c *Client) handshake() error {
+	greeting := fmt.Sprintf("v%d..%d", minClientVer, maxClientVer)
+	if _, err := c.conn.Write([]byte("API\x00")); err != nil {
+		return fmt.Errorf("write API prefix: %w", err)
+	}
+	if err := c.writeFrame([]byte(greeting)); err != nil {
+		return fmt.Errorf("write greeting: %w", err)
+	}
+	payload, err := c.readFrame()
+	if err != nil {
+		return fmt.Errorf("read handshake: %w", err)
+	}
+	f := splitFields(payload)
+	if len(f) < 2 {
+		return fmt.Errorf("malformed handshake: %q", string(payload))
+	}
+	sv, err := strconv.Atoi(f[0])
+	if err != nil {
+		return fmt.Errorf("bad server version %q: %w", f[0], err)
+	}
+	c.serverVersion = sv
+	c.decoder.SetServerVersion(sv)
+	c.connTime = f[1]
+	return nil
+}
+
+// startAPI sends the startApi message: msgId, version(2), clientId, optCaps.
+func (c *Client) startAPI() error {
+	return c.SendFields(strconv.Itoa(outStartAPI), "2", strconv.Itoa(c.clientID), "")
+}
+
+func (c *Client) readLoop() {
+	for {
+		err := func() error {
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Fprintf(os.Stderr, "tws_client: recovered from panic in readLoop: %v\n", r)
+				}
+			}()
+			payload, readErr := c.readFrame()
+			if readErr != nil {
+				return readErr
+			}
+			fields := splitFields(payload)
+			debugLogFrame("RECV", fields)
+			if decodeErr := c.decoder.Decode(fields); decodeErr != nil {
+				fmt.Fprintf(os.Stderr, "tws_client: decode error: %v\n", decodeErr)
+			}
+			return nil
+		}()
+		if err != nil {
+			c.mu.Lock()
+			c.connected = false
+			c.mu.Unlock()
+			c.signalClosed()
+			return
+		}
+	}
+}
+
+// Wrapper implementation for internal lifecycle routing.
+
+func (c *Client) NextValidId(orderId int64) {
+	c.orderIDs.Seed(orderId)
+	select {
+	case c.nextIDCh <- orderId:
+	default: // first one already delivered
+	}
+	c.mu.RLock()
+	ws := make([]Wrapper, len(c.wrappers))
+	copy(ws, c.wrappers)
+	c.mu.RUnlock()
+	for _, w := range ws {
+		w.NextValidId(orderId)
+	}
+}
+
+// NextOrderId atomically acquires the next valid order ID from the client's manager.
+func (c *Client) NextOrderId() int64 {
+	return c.orderIDs.Next()
+}
+
+func (c *Client) ManagedAccounts(accountsList string) {
+	select {
+	case c.acctCh <- accountsList:
+	default:
+	}
+	c.mu.Lock()
+	c.accounts = accountsList
+	c.mu.Unlock()
+	
+	c.mu.RLock()
+	ws := make([]Wrapper, len(c.wrappers))
+	copy(ws, c.wrappers)
+	c.mu.RUnlock()
+	for _, w := range ws {
+		w.ManagedAccounts(accountsList)
+	}
+}
+
+func (c *Client) Error(reqId int, code int, msg string) {
+	c.mu.RLock()
+	ws := make([]Wrapper, len(c.wrappers))
+	copy(ws, c.wrappers)
+	c.mu.RUnlock()
+
+	if isInfoCode(code) {
+		for _, w := range ws {
+			w.Error(reqId, code, msg)
+		}
+		return
+	}
+
+	if reqId > 0 && !isWarningCode(code) {
+		c.dispatcher.Dispatch(int64(reqId), fmt.Errorf("TWS Error %d: %s", code, msg))
+		// We do NOT complete the channel here. Not all errors are terminal, 
+		// and it is the caller's responsibility to defer Complete() on the request channel.
+	}
+
+	c.mu.RLock()
+	isConnected := c.connected
+	cb := c.AsyncErrorCallback
+	c.mu.RUnlock()
+
+	if cb != nil {
+		cb(reqId, code, msg)
+	}
+	for _, w := range ws {
+		w.Error(reqId, code, msg)
+	}
+
+	if !isConnected {
+		select {
+		case c.errCh <- fmt.Errorf("TWS error (id %d, code %d): %s", reqId, code, msg):
+		default:
+		}
+	}
+}
+
+func (c *Client) CurrentTime(timeInSeconds int64) {
+	c.mu.RLock()
+	ws := make([]Wrapper, len(c.wrappers))
+	copy(ws, c.wrappers)
+	c.mu.RUnlock()
+	for _, w := range ws {
+		w.CurrentTime(timeInSeconds)
+	}
+}
+
+// isInfoCode reports whether a TWS message code is informational rather than a
+// real error (data-farm connection notices and connectivity warnings).
+func isInfoCode(code int) bool {
+	return (code >= 2100 && code <= 2200) || (code >= 1100 && code <= 1102)
+}
+
+// isWarningCode reports codes that annotate a still-live request rather than
+// signalling a failure, so they must not be surfaced to a waiting caller as a
+// rejection. The authoritative order state still arrives via orderStatus.
+// Extend as new non-fatal codes are observed.
+func isWarningCode(code int) bool {
+	switch code {
+	case 399: // order message, e.g. "order will not be placed until <time>"
+		return true
+	default:
+		return false
+	}
+}
+
+// Accessors.
+
+func (c *Client) ServerVersion() int    { return c.serverVersion }
+func (c *Client) ConnectionTime() string { return c.connTime }
+func (c *Client) IsConnected() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.connected
+}
+
+
+
+func (c *Client) Accounts() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.accounts
+}
+
+func (c *Client) Close() error {
+	c.mu.Lock()
+	c.connected = false
+	c.mu.Unlock()
+	c.signalClosed()
+	if c.conn != nil {
+		return c.conn.Close()
+	}
+	return nil
+}
+
+func (c *Client) signalClosed() {
+	c.closeOnce.Do(func() { close(c.closed) })
+}
+
+// Closed returns a channel that is closed when the connection is torn down
+// (read-loop exit or Close()). Callers watch it to halt activity on disconnect.
+func (c *Client) Closed() <-chan struct{} { return c.closed }
+
+// Reconnect tears down the old connection, resets internal state, and
+// establishes a fresh session. Wrappers remain registered and will receive
+// callbacks from the new connection. Must not be called concurrently.
+func (c *Client) Reconnect(ctx context.Context) error {
+	if c.conn != nil {
+		c.conn.Close()
+	}
+
+	c.dispatcher.DrainAll()
+
+	c.mu.Lock()
+	c.connected = false
+	c.accounts = ""
+	c.orderIDs = OrderIdManager{}
+	c.nextIDCh = make(chan int64, 1)
+	c.acctCh = make(chan string, 1)
+	c.errCh = make(chan error, 1)
+	c.closed = make(chan struct{})
+	c.closeOnce = sync.Once{}
+	c.dispatcher = NewDispatcher()
+	c.conn = nil
+	c.reader = nil
+	c.serverVersion = 0
+	c.connTime = ""
+	c.mu.Unlock()
+
+	c.decoder = NewDecoder(c)
+
+	return c.Connect(ctx)
+}
+
+// --- framing helpers ---
+
+var twsDebug = os.Getenv("TWS_DEBUG") == "1"
+
+func debugLogFrame(prefix string, fields []string) {
+	if !twsDebug {
+		return
+	}
+	masked := make([]string, len(fields))
+	for i, f := range fields {
+		if strings.HasPrefix(f, "DU") && len(f) >= 8 {
+			masked[i] = f[:2] + "***" + f[len(f)-4:]
+		} else {
+			masked[i] = f
+		}
+	}
+	fmt.Printf("%s: %q\n", prefix, masked)
+}
+
+// sendFields writes one TWS message: each field null-terminated, the whole
+// body length-prefixed with a 4-byte big-endian length.
+func (c *Client) SendFields(fields ...string) error {
+	debugLogFrame("SEND", fields)
+	body := []byte(strings.Join(fields, "\x00") + "\x00")
+	return c.writeFrame(body)
+}
+
+func (c *Client) Encoder() *Encoder {
+	return NewEncoder(c)
+}
+
+// Register assigns a channel to a request ID for receiving dispatched messages.
+func (c *Client) Register(reqId int64) <-chan interface{} {
+	return c.dispatcher.Register(reqId)
+}
+
+// Complete removes a request ID from the dispatcher.
+func (c *Client) Complete(reqId int64) {
+	c.dispatcher.Complete(reqId)
+}
+
+func (c *Client) AddWrapper(w Wrapper) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, existing := range c.wrappers {
+		if existing == w {
+			return
+		}
+	}
+	c.wrappers = append(c.wrappers, w)
+}
+
+func (c *Client) RemoveWrapper(w Wrapper) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i, existing := range c.wrappers {
+		if existing == w {
+			c.wrappers = append(c.wrappers[:i], c.wrappers[i+1:]...)
+			return
+		}
+	}
+}
+
+func (c *Client) writeFrame(payload []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	buf := make([]byte, 4+len(payload))
+	binary.BigEndian.PutUint32(buf[:4], uint32(len(payload)))
+	copy(buf[4:], payload)
+	_, err := c.conn.Write(buf)
+	return err
+}
+
+func (c *Client) readFrame() ([]byte, error) {
+	var hdr [4]byte
+	if _, err := io.ReadFull(c.reader, hdr[:]); err != nil {
+		return nil, err
+	}
+	n := binary.BigEndian.Uint32(hdr[:])
+	if n == 0 || n > 1<<24 {
+		return nil, fmt.Errorf("implausible frame length %d", n)
+	}
+	buf := make([]byte, n)
+	if _, err := io.ReadFull(c.reader, buf); err != nil {
+		return nil, err
+	}
+	return buf, nil
+}
+
+func splitFields(payload []byte) []string {
+	if len(payload) == 0 {
+		return nil
+	}
+	s := strings.TrimSuffix(string(payload), "\x00")
+	if s == "" {
+		return []string{""}
+	}
+	return strings.Split(s, "\x00")
+}
+
+// ReqContractDetails fetches contract details synchronously using the dispatcher.
+func (c *Client) ReqContractDetails(ctx context.Context, contract Contract) ([]ContractDetails, error) {
+	reqId := c.NextOrderId()
+	ch := c.dispatcher.Register(reqId)
+	defer c.dispatcher.Complete(reqId)
+	
+	if err := c.Encoder().ReqContractDetails(reqId, contract); err != nil {
+		return nil, err
+	}
+	
+	var results []ContractDetails
+	for {
+		select {
+		case msg, ok := <-ch:
+			if !ok {
+				return results, nil
+			}
+			if cd, isCd := msg.(ContractDetails); isCd {
+				results = append(results, cd)
+			} else if errWrapper, isErr := msg.(error); isErr {
+				return results, errWrapper
+			}
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+}
+
+func (c *Client) ContractDetails(reqId int64, details ContractDetails) {
+	c.dispatcher.Dispatch(reqId, details)
+	c.mu.RLock()
+	ws := make([]Wrapper, len(c.wrappers))
+	copy(ws, c.wrappers)
+	c.mu.RUnlock()
+	for _, w := range ws {
+		w.ContractDetails(reqId, details)
+	}
+}
+
+func (c *Client) ContractDetailsEnd(reqId int64) {
+	c.dispatcher.Complete(reqId)
+	c.mu.RLock()
+	ws := make([]Wrapper, len(c.wrappers))
+	copy(ws, c.wrappers)
+	c.mu.RUnlock()
+	for _, w := range ws {
+		w.ContractDetailsEnd(reqId)
+	}
+}
+
+func (c *Client) TickPrice(reqId int64, tickType int, price float64, size decimal.Decimal, attr TickAttrib) {
+	c.dispatcher.Dispatch(reqId, TickPriceMsg{TickType: tickType, Price: price, Size: size, Attr: attr})
+	c.mu.RLock()
+	ws := make([]Wrapper, len(c.wrappers))
+	copy(ws, c.wrappers)
+	c.mu.RUnlock()
+	for _, w := range ws {
+		w.TickPrice(reqId, tickType, price, size, attr)
+	}
+}
+
+func (c *Client) TickSize(reqId int64, tickType int, size decimal.Decimal) {
+	c.dispatcher.Dispatch(reqId, TickSizeMsg{TickType: tickType, Size: size})
+	c.mu.RLock()
+	ws := make([]Wrapper, len(c.wrappers))
+	copy(ws, c.wrappers)
+	c.mu.RUnlock()
+	for _, w := range ws {
+		w.TickSize(reqId, tickType, size)
+	}
+}
+
+func (c *Client) MarketDataType(reqId int64, marketDataType int) {
+	c.dispatcher.Dispatch(reqId, MarketDataTypeMsg{Type: marketDataType})
+	c.mu.RLock()
+	ws := make([]Wrapper, len(c.wrappers))
+	copy(ws, c.wrappers)
+	c.mu.RUnlock()
+	for _, w := range ws {
+		w.MarketDataType(reqId, marketDataType)
+	}
+}
+
+func (c *Client) AccountSummary(reqId int64, account, tag, value, currency string) {
+	c.dispatcher.Dispatch(reqId, AccountSummaryMsg{ReqId: reqId, Account: account, Tag: tag, Value: value, Currency: currency})
+	c.mu.RLock()
+	ws := make([]Wrapper, len(c.wrappers))
+	copy(ws, c.wrappers)
+	c.mu.RUnlock()
+	for _, w := range ws {
+		w.AccountSummary(reqId, account, tag, value, currency)
+	}
+}
+
+func (c *Client) AccountSummaryEnd(reqId int64) {
+	c.dispatcher.Complete(reqId)
+	c.mu.RLock()
+	ws := make([]Wrapper, len(c.wrappers))
+	copy(ws, c.wrappers)
+	c.mu.RUnlock()
+	for _, w := range ws {
+		w.AccountSummaryEnd(reqId)
+	}
+}
+
+func (c *Client) Position(account string, contract Contract, position decimal.Decimal, avgCost float64) {
+	// Positions don't have a reqId in the API natively, we can dispatch it to a special constant ID like 0,
+	// or the caller can just use the wrapper. But for our dispatcher, let's dispatch to reqId 0.
+	c.dispatcher.Dispatch(0, PositionMsg{Account: account, Contract: contract, Position: position, AvgCost: avgCost})
+	c.mu.RLock()
+	ws := make([]Wrapper, len(c.wrappers))
+	copy(ws, c.wrappers)
+	c.mu.RUnlock()
+	for _, w := range ws {
+		w.Position(account, contract, position, avgCost)
+	}
+}
+
+func (c *Client) PositionEnd() {
+	c.dispatcher.Complete(0)
+	c.mu.RLock()
+	ws := make([]Wrapper, len(c.wrappers))
+	copy(ws, c.wrappers)
+	c.mu.RUnlock()
+	for _, w := range ws {
+		w.PositionEnd()
+	}
+}
+
+const AccountUpdatesDispatchKey int64 = -1
+
+func (c *Client) UpdatePortfolio(contract Contract, position decimal.Decimal, marketPrice, marketValue, averageCost, unrealizedPNL, realizedPNL float64, accountName string) {
+	c.dispatcher.Dispatch(AccountUpdatesDispatchKey, UpdatePortfolioMsg{
+		Contract: contract, Position: position, MarketPrice: marketPrice,
+		MarketValue: marketValue, AverageCost: averageCost,
+		UnrealizedPNL: unrealizedPNL, RealizedPNL: realizedPNL, AccountName: accountName,
+	})
+	c.mu.RLock()
+	ws := make([]Wrapper, len(c.wrappers))
+	copy(ws, c.wrappers)
+	c.mu.RUnlock()
+	for _, w := range ws {
+		w.UpdatePortfolio(contract, position, marketPrice, marketValue, averageCost, unrealizedPNL, realizedPNL, accountName)
+	}
+}
+
+func (c *Client) AccountDownloadEnd(accountName string) {
+	c.dispatcher.Complete(AccountUpdatesDispatchKey)
+	c.mu.RLock()
+	ws := make([]Wrapper, len(c.wrappers))
+	copy(ws, c.wrappers)
+	c.mu.RUnlock()
+	for _, w := range ws {
+		w.AccountDownloadEnd(accountName)
+	}
+}
+
+func (c *Client) OpenOrder(orderId int64, contract Contract, order Order, orderState OrderState) {
+	// Open orders don't always have a strict request ID if requested globally, but we can dispatch to 0.
+	c.dispatcher.Dispatch(0, OpenOrderMsg{OrderId: orderId, Contract: contract, Order: order, OrderState: orderState})
+	c.mu.RLock()
+	ws := make([]Wrapper, len(c.wrappers))
+	copy(ws, c.wrappers)
+	c.mu.RUnlock()
+	for _, w := range ws {
+		w.OpenOrder(orderId, contract, order, orderState)
+	}
+}
+
+func (c *Client) OpenOrderEnd() {
+	c.dispatcher.Complete(0)
+	c.mu.RLock()
+	ws := make([]Wrapper, len(c.wrappers))
+	copy(ws, c.wrappers)
+	c.mu.RUnlock()
+	for _, w := range ws {
+		w.OpenOrderEnd()
+	}
+}
+
+func (c *Client) OrderStatus(orderId int64, status string, filled, remaining decimal.Decimal, avgFillPrice float64, permId, parentId int64, lastFillPrice float64, clientId int, whyHeld string, mktCapPrice float64) {
+	c.dispatcher.Dispatch(orderId, OrderStatusMsg{
+		OrderId: orderId, Status: status, Filled: filled, Remaining: remaining, AvgFillPrice: avgFillPrice, 
+		PermId: permId, ParentId: parentId, LastFillPrice: lastFillPrice, ClientId: clientId, WhyHeld: whyHeld, MktCapPrice: mktCapPrice,
+	})
+	c.mu.RLock()
+	ws := make([]Wrapper, len(c.wrappers))
+	copy(ws, c.wrappers)
+	c.mu.RUnlock()
+	for _, w := range ws {
+		w.OrderStatus(orderId, status, filled, remaining, avgFillPrice, permId, parentId, lastFillPrice, clientId, whyHeld, mktCapPrice)
+	}
+}
+
+func (c *Client) HistoricalData(reqId int64, bar HistoricalBar) {
+	c.dispatcher.Dispatch(reqId, HistoricalDataMsg{ReqId: reqId, Bar: bar})
+	c.mu.RLock()
+	ws := make([]Wrapper, len(c.wrappers))
+	copy(ws, c.wrappers)
+	c.mu.RUnlock()
+	for _, w := range ws {
+		w.HistoricalData(reqId, bar)
+	}
+}
+
+func (c *Client) HistoricalDataEnd(reqId int64, startDateStr, endDateStr string) {
+	c.dispatcher.Dispatch(reqId, HistoricalDataEndMsg{ReqId: reqId, Start: startDateStr, End: endDateStr})
+	c.dispatcher.Complete(reqId)
+	c.mu.RLock()
+	ws := make([]Wrapper, len(c.wrappers))
+	copy(ws, c.wrappers)
+	c.mu.RUnlock()
+	for _, w := range ws {
+		w.HistoricalDataEnd(reqId, startDateStr, endDateStr)
+	}
+}
+
+func (c *Client) HistoricalDataUpdate(reqId int64, bar HistoricalBar) {
+	c.dispatcher.Dispatch(reqId, HistoricalDataUpdateMsg{ReqId: reqId, Bar: bar})
+	c.mu.RLock()
+	ws := make([]Wrapper, len(c.wrappers))
+	copy(ws, c.wrappers)
+	c.mu.RUnlock()
+	for _, w := range ws {
+		w.HistoricalDataUpdate(reqId, bar)
+	}
+}
+
+func (c *Client) SecurityDefinitionOptionParameter(reqId int64, exchange string, underlyingConId int64, tradingClass, multiplier string, expirations []string, strikes []float64) {
+	c.dispatcher.Dispatch(reqId, SecDefOptParamsMsg{
+		Exchange: exchange, UnderlyingConId: underlyingConId,
+		TradingClass: tradingClass, Multiplier: multiplier,
+		Expirations: expirations, Strikes: strikes,
+	})
+	c.mu.RLock()
+	ws := make([]Wrapper, len(c.wrappers))
+	copy(ws, c.wrappers)
+	c.mu.RUnlock()
+	for _, w := range ws {
+		w.SecurityDefinitionOptionParameter(reqId, exchange, underlyingConId, tradingClass, multiplier, expirations, strikes)
+	}
+}
+
+func (c *Client) SecurityDefinitionOptionParameterEnd(reqId int64) {
+	c.dispatcher.Complete(reqId)
+	c.mu.RLock()
+	ws := make([]Wrapper, len(c.wrappers))
+	copy(ws, c.wrappers)
+	c.mu.RUnlock()
+	for _, w := range ws {
+		w.SecurityDefinitionOptionParameterEnd(reqId)
+	}
+}
+
+func (c *Client) TickOptionComputation(reqId int64, tickType int, tickAttrib int, impliedVol, delta, optPrice, pvDividend, gamma, vega, theta, undPrice float64) {
+	c.dispatcher.Dispatch(reqId, TickOptionComputationMsg{
+		TickType: tickType, TickAttrib: tickAttrib,
+		ImpliedVol: impliedVol, Delta: delta, OptPrice: optPrice,
+		PvDividend: pvDividend, Gamma: gamma, Vega: vega,
+		Theta: theta, UndPrice: undPrice,
+	})
+	c.mu.RLock()
+	ws := make([]Wrapper, len(c.wrappers))
+	copy(ws, c.wrappers)
+	c.mu.RUnlock()
+	for _, w := range ws {
+		w.TickOptionComputation(reqId, tickType, tickAttrib, impliedVol, delta, optPrice, pvDividend, gamma, vega, theta, undPrice)
+	}
+}
+
+// ReqSecDefOptParams fetches available option parameters synchronously.
+func (c *Client) ReqSecDefOptParams(ctx context.Context, underlyingSymbol, futFopExchange, underlyingSecType string, underlyingConId int64) ([]SecDefOptParamsMsg, error) {
+	reqId := c.NextOrderId()
+	ch := c.dispatcher.Register(reqId)
+	defer c.dispatcher.Complete(reqId)
+
+	if err := c.Encoder().ReqSecDefOptParams(reqId, underlyingSymbol, futFopExchange, underlyingSecType, underlyingConId); err != nil {
+		return nil, err
+	}
+
+	var results []SecDefOptParamsMsg
+	for {
+		select {
+		case msg, ok := <-ch:
+			if !ok {
+				return results, nil
+			}
+			if sdop, isSDOP := msg.(SecDefOptParamsMsg); isSDOP {
+				results = append(results, sdop)
+			} else if errWrapper, isErr := msg.(error); isErr {
+				return results, errWrapper
+			}
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+}

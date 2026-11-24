@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.4'
+          cache: true
+      - name: gofmt
+        run: |
+          bad=$(gofmt -l . | grep -v -E '(_Archivo_Muerto|_Backups)' || true)
+          if [ -n "$bad" ]; then echo "$bad"; exit 1; fi
+      - name: go vet
+        run: go vet ./backtest ./cmd/... ./config/... ./configstore/... ./controllers/... ./database/... ./interfaces/... ./models/... ./services/... ./tws/...
+      - name: go test -race
+        run: go test -race ./backtest ./cmd/... ./config/... ./configstore/... ./controllers/... ./database/... ./interfaces/... ./models/... ./services/... ./tws/...
+      - name: staticcheck
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@latest
+          staticcheck ./backtest ./cmd/... ./config/... ./configstore/... ./controllers/... ./database/... ./interfaces/... ./models/... ./services/... ./tws/...
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./backtest ./cmd/... ./config/... ./configstore/... ./controllers/... ./database/... ./interfaces/... ./models/... ./services/... ./tws/...

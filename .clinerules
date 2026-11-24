@@ -1,0 +1,24 @@
+# Reglas del proyecto OpenProphet
+
+- Antes de actuar, lee `HANDOFF.md` y `projectbrief.md`.
+- Responde en español.
+- No borres `_Backups` ni `_Archivo_Muerto` sin confirmación.
+- No ejecutes `go clean -cache`, no instales Docker y no reinicies WSL/Hyper-V sin confirmación.
+- No cambies los límites 20/60/10 ni el time stop de 60 minutos sin confirmación.
+- Usa Go 1.27.4 (`GOTOOLCHAIN=go1.27.4`).
+- Tras cambios de código: `go build` y tests del paquete.
+- Ejecuta `.\check.ps1` solo al cerrar una tanda con cambios de código o antes de operar en paper. No lo ejecutes por cambios de documentación ni por preguntas simples.
+- No hagas commit ni push sin pedir permiso.
+
+## Cierre automático de documentación
+
+- **No esperes a que el usuario lo pida.** Al terminar cualquier tarea que cambie código, configuración, estrategias, CI, Docker o documentación, actualiza en la misma iteración:
+  - `HANDOFF.md`: estado, hecho, pendiente y una entrada nueva en `## 7. Registro de sesiones`.
+  - `projectbrief.md`: fecha y una entrada nueva en `## 13. Historial de cambios`.
+- Ejecuta `.\update_docs.ps1` para refrescar los datos automáticos (fecha, Go, check, bot, disco y backup).
+- Para cambios solo de documentación usa `.\update_docs.ps1`; no hace falta ejecutar `check.ps1`.
+- `CHECK.bat` es solo para uso manual; para automatización usa `.\check.ps1` (no tiene `pause`).
+- La parte semántica —qué se hizo y qué falta— debes escribirla tú; el script no la inventa.
+- Si no hubo cambios reales, no toques los documentos.
+- Antes de la respuesta final, verifica que ambos documentos quedaron coherentes.
+

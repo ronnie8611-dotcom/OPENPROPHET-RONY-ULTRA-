@@ -1,0 +1,34 @@
+{
+  "cuenta": {
+    "capital_inicial_usd": 10000,
+    "moneda": "USD",
+    "nota": "Cambia capital_inicial_usd y TODO el backtest se reajusta automaticamente"
+  },
+  "comisiones": {
+    "qqq_por_accion_usd": 0.005,
+    "qqq_slippage_ticks": 1,
+    "nq_por_contrato_usd": 2.50,
+    "nq_slippage_ticks": 1
+  },
+  "riesgo": {
+    "kill_switch_pct": 5.0,
+    "max_posicion_pct": 20.0,
+    "max_desplegado_pct": 60.0,
+    "max_trades_por_dia": 2
+  },
+  "backtest": {
+    "simbolos": ["QQQ", "NQ=F"],
+    "timeframes": ["1d", "1h", "30m", "15m", "5m", "1m"],
+    "walk_forward": {
+      "train_meses": 6,
+      "test_meses": 3
+    }
+  },
+  "estrategias": {
+    "fit_mom":         { "max_riesgo_pct": 1.00 },
+    "raschke":         { "max_riesgo_pct": 0.75 },
+    "mean_reversion":  { "max_riesgo_pct": 1.00 },
+    "combined":        { "max_riesgo_pct": 1.00 },
+    "turtle_breakout": { "max_riesgo_pct": 1.00 }
+  }
+}

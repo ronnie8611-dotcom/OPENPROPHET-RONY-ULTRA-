@@ -1,0 +1,140 @@
+{
+  "schemaVersion": 5,
+  "active_strategies": [
+    "raschke",
+    "mean_reversion"
+  ],
+  "observe_symbols": [
+    "QQQ",
+    "SPY",
+    "IWM",
+    "TSLA",
+    "GOOGL",
+    "META",
+    "MNQ"
+  ],
+  "beat": {
+    "enabled": true,
+    "notes": "La vigilancia automatica del agente solo analiza estos instrumentos. ESTX50 y cualquier mercado europeo estan prohibidos.",
+    "symbols": ["QQQ", "MNQ"]
+  },
+  "trading_rules": {
+    "enabled": false,
+    "version": 1,
+    "note": "Reglas documentadas pero DESACTIVADAS. El agente NO las recibe mientras enabled=false. Cambiar a true para activarlas.",
+    "market_mandate": [
+      "Unico mercado permitido: Estados Unidos (US Futures y US Stocks).",
+      "PROHIBIDO analizar, mencionar o sugerir trades en ESTX50 o cualquier mercado europeo.",
+      "Si los datos estan retrasados, analizar con lo disponible y avisar: WARNING: DELAYED DATA (15M).",
+      "Para futuros (MNQ, NQ, ES, YM, RTY) usar search_contract para obtener el con_id y pasarlo como texto a get_quote."
+    ],
+    "setups": [
+      "Initial Balance (IB): rango de la primera hora de la sesion de NY (9:30 a 10:30 ET / 7:30 a 8:30 CST).",
+      "VWAP: filtro de tendencia obligatorio (precio \u003e VWAP para largos, precio \u003c VWAP para cortos).",
+      "PDH/PDL: maximos y minimos del dia anterior como niveles de muro.",
+      "Setups: ruptura confirmada (Breakout), falso rompimiento (Fade) y ruptura de muros (Sweep)."
+    ],
+    "risk_management": [
+      "Stop Loss basado en el IB Midpoint o en un limite de puntos fijo.",
+      "Sizing por valor del punto: NQ=$20, MNQ=$2, ES=$50, MES=$5.",
+      "Nota: esta regla de -2% diario pertenece al conjunto desactivado; el kill switch vigente del sistema es -5% diario y -8% semanal."
+    ]
+  },
+  "strategies": {
+    "combined": {
+      "enabled": false,
+      "operate_allow": [],
+      "operate_block": []
+    },
+    "fit_mom": {
+      "enabled": false,
+      "operate_allow": [],
+      "operate_block": []
+    },
+    "mean_reversion": {
+      "description": "Bollinger Bands + RSI (Compra en sobreventa, Vende en sobrecompra)",
+      "enabled": true,
+      "engine": "mean_reversion",
+      "max_risk_pct": 1,
+      "min_rr": 1.5,
+      "name": "Mean Reversion (Bollinger + RSI)",
+      "operate_allow": [
+        "QQQ",
+        "SPY",
+        "IWM",
+        "TSLA",
+        "GOOGL",
+        "META"
+      ],
+      "operate_block": [
+        "AAPL",
+        "NVDA",
+        "MSFT",
+        "AMZN",
+        "PLTR",
+        "DOGE",
+        "BTC",
+        "XRP",
+        "SOL"
+      ],
+      "setups": [
+        "oversold_rebound",
+        "overbought_drop"
+      ],
+      "timeframe": "1Day"
+    },
+    "raschke": {
+      "atr_thresholds": {
+        "narrow": 0.3,
+        "wide": 0.5
+      },
+      "description": "Volatility Breakout (Validada Sharpe 3.48)",
+      "enabled": true,
+      "engine": "raschke",
+      "max_risk_pct": 0.75,
+      "min_rr": 2.5,
+      "name": "Raschke Volatility Breakout",
+      "operate_allow": [
+        "QQQ",
+        "SPY",
+        "IWM",
+        "TSLA",
+        "GOOGL",
+        "META"
+      ],
+      "operate_block": [
+        "AAPL",
+        "NVDA",
+        "MSFT",
+        "AMZN",
+        "PLTR",
+        "DOGE",
+        "BTC",
+        "XRP",
+        "SOL",
+        "SPCX",
+        "AI",
+        "BOTZ",
+        "ARKX",
+        "XOVR",
+        "RKLB",
+        "MNQZ6"
+      ],
+      "setups": [
+        "volatility_breakout"
+      ]
+    },
+    "turtle_breakout": {
+      "enabled": false,
+      "operate_allow": [],
+      "operate_block": []
+    }
+  },
+  "global_filters": {
+    "require_vwap_alignment": true,
+    "min_volume_multiplier": 1.5,
+    "max_trades_per_day": 2,
+    "time_stop_minutes": 60,
+    "avoid_power_hour": true
+  }
+}
